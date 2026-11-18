@@ -554,6 +554,10 @@ try {
     }),
   });
 
+  if (aiRes.status !== 200) {
+    const txt = await aiRes.text();
+    console.error(`LiteLLM returned status ${aiRes.status}: ${txt}`);
+  }
   const latency = ((Date.now() - startTime) / 1000).toFixed(2);
   assert.strictEqual(aiRes.status, 200, `LiteLLM gateway returned HTTP ${aiRes.status}`);
   const aiData = await aiRes.json();

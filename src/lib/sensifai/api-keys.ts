@@ -7,6 +7,7 @@ export interface ApiKeyRecord {
   name: string;
   key: string;
   maskedKey: string;
+  userId?: string;
   createdAt: string;
   lastUsedAt: string | null;
   status: "active" | "revoked";
@@ -50,7 +51,8 @@ function persistKeys(keys: ApiKeyRecord[]) {
  */
 export function createNewApiKey(
   name = "B2B Production API Key",
-  prefix = "sensi"
+  prefix = "sensi",
+  userId?: string
 ): ApiKeyRecord {
   const keys = loadStoredKeys();
   const cleanPrefix = (prefix || "sensi").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -63,6 +65,7 @@ export function createNewApiKey(
     name,
     key: rawKey,
     maskedKey,
+    userId: userId || undefined,
     createdAt: new Date().toISOString(),
     lastUsedAt: null,
     status: "active",
@@ -73,8 +76,12 @@ export function createNewApiKey(
   return newKey;
 }
 
-export function listApiKeys(): ApiKeyRecord[] {
-  return loadStoredKeys();
+export function listApiKeys(userId?: string): ApiKeyRecord[] {
+  const keys = loadStoredKeys();
+  if (userId) {
+    return keys.filter((k) => k.userId === userId);
+  }
+  return keys;
 }
 
 export function validateApiKey(rawKey: string): ApiKeyRecord | null {
@@ -89,9 +96,9 @@ export function validateApiKey(rawKey: string): ApiKeyRecord | null {
   return null;
 }
 
-export function revokeApiKey(id: string): boolean {
+export function revokeApiKey(id: string, userId?: string): boolean {
   const keys = loadStoredKeys();
-  const target = keys.find((k) => k.id === id);
+  const target = keys.find((k) => k.id === id && (!userId || k.userId === userId));
   if (target) {
     target.status = "revoked";
     persistKeys(keys);

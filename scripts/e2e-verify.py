@@ -216,10 +216,20 @@ async def run_e2e():
             assert LOGTO_CLIENT_SECRET not in standards_text, "CRITICAL LEAK: Logto secret found in /api/v1/standards!"
         print("  ✓ GET /api/v1/standards: 200 OK with full taxonomy & verified zero Logto ID leakage")
 
-        # 7.2 Developer Key Issuance POST /api/v1/keys
+        # 7.2 Developer Key Issuance Auth Gate (Unauthenticated guest strictly rejected)
+        unauth_key_res = await page.request.post(f"{BASE_URL}/api/v1/keys", data=json.dumps({
+            "name": "Guest Key Attempt"
+        }), headers={"Content-Type": "application/json"})
+        assert unauth_key_res.status == 401, f"Expected 401 Unauthorized for unauthenticated key issuance, got {unauth_key_res.status}"
+        print("  ✓ POST /api/v1/keys (Unauthenticated): Strictly rejected with HTTP 401 UNAUTHORIZED")
+
+        # 7.2b Authenticated Developer Key Issuance POST /api/v1/keys
         new_key_res = await page.request.post(f"{BASE_URL}/api/v1/keys", data=json.dumps({
             "name": "Automated B2B Key"
-        }), headers={"Content-Type": "application/json"})
+        }), headers={
+            "Content-Type": "application/json",
+            "X-Sensifai-Customer-Id": USER_LOGTO_ID
+        })
         assert new_key_res.status == 201, f"Expected 201 Created on /api/v1/keys, got {new_key_res.status}"
         new_key_text = await new_key_res.text()
         new_key_data = json.loads(new_key_text)
@@ -234,8 +244,15 @@ async def run_e2e():
             assert LOGTO_CLIENT_SECRET not in new_key_text, "CRITICAL LEAK: Logto secret found in /api/v1/keys!"
         print(f"  ✓ POST /api/v1/keys: Dedicated key generated ({raw_api_key[:12]}...{raw_api_key[-4:]}) with zero Logto ID leakage")
 
-        # 7.3 Key Listing GET /api/v1/keys (masked secrets)
-        list_keys_res = await page.request.get(f"{BASE_URL}/api/v1/keys")
+        # 7.3 Unauthenticated Key Listing (strictly rejected)
+        unauth_list_res = await page.request.get(f"{BASE_URL}/api/v1/keys")
+        assert unauth_list_res.status == 401, f"Expected 401 from unauthenticated GET /api/v1/keys, got {unauth_list_res.status}"
+        print("  ✓ GET /api/v1/keys (Unauthenticated): Strictly rejected with HTTP 401 UNAUTHORIZED")
+
+        # 7.3b Authenticated Key Listing GET /api/v1/keys (masked secrets)
+        list_keys_res = await page.request.get(f"{BASE_URL}/api/v1/keys", headers={
+            "X-Sensifai-Customer-Id": USER_LOGTO_ID
+        })
         assert list_keys_res.status == 200, f"Expected 200 from GET /api/v1/keys, got {list_keys_res.status}"
         list_keys_text = await list_keys_res.text()
         list_keys_data = json.loads(list_keys_text)
@@ -259,7 +276,7 @@ async def run_e2e():
         }), headers={
             "Content-Type": "application/json",
             "Authorization": f"Bearer {raw_api_key}"
-        })
+        }, timeout=60000)
         assert action_res.status == 200, f"Expected 200 from {action_path}, got {action_res.status}"
         action_text = await action_res.text()
         action_data = json.loads(action_text)
@@ -277,7 +294,7 @@ async def run_e2e():
         }), headers={
             "Content-Type": "application/json",
             "X-API-Key": raw_api_key
-        })
+        }, timeout=60000)
         assert action_xkey_res.status == 200, f"Expected 200 from {action_path} with X-API-Key, got {action_xkey_res.status}"
         print(f"  ✓ POST {action_path} (X-API-Key header): Successfully authenticated and evaluated")
 

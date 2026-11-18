@@ -2,6 +2,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 import { NextRequest, NextResponse } from "next/server";
+import { getUserIdFromRequest } from "@/lib/sensifai/auth";
 import {
   listApiKeys,
   createNewApiKey,
@@ -14,7 +15,7 @@ export async function OPTIONS() {
     headers: {
       "Access-Control-Allow-Origin": "*",
       "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization, X-API-Key, Content-Type",
+      "Access-Control-Allow-Headers": "Authorization, X-API-Key, Content-Type, X-Sensifai-Customer-Id",
     },
   });
 }
@@ -27,10 +28,24 @@ export async function OPTIONS() {
  *
  * STRICT ZERO LOGTO ID LEAKAGE:
  * Never exposes or returns personal Logto IDs (user_account_id) or client secrets.
+ * Strictly enforces authentication: only authenticated users can mint or view keys.
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
-    const keys = listApiKeys();
+    const sub = getUserIdFromRequest(req);
+    if (!sub) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Authentication required to view developer API keys. Please sign in.",
+          code: "UNAUTHORIZED",
+          login_url: "/api/auth/login",
+        },
+        { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+      );
+    }
+
+    const keys = listApiKeys(sub);
     const sanitized = keys.map((k) => ({
       id: k.id,
       name: k.name,
@@ -63,11 +78,24 @@ export async function GET() {
 
 export async function POST(req: NextRequest) {
   try {
+    const sub = getUserIdFromRequest(req);
+    if (!sub) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Authentication required. Please sign in with your Sensifai account to generate an API key.",
+          code: "UNAUTHORIZED",
+          login_url: "/api/auth/login",
+        },
+        { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+      );
+    }
+
     const body = await req.json().catch(() => ({}));
     const name = String(body.name || "B2B Production API Key").trim();
-    const prefix = String(body.prefix || "sensi").trim();
+    const prefix = String(body.prefix || "stp").trim();
 
-    const newKeyRecord = createNewApiKey(name, prefix);
+    const newKeyRecord = createNewApiKey(name, prefix, sub);
 
     return NextResponse.json(
       {
@@ -97,6 +125,18 @@ export async function POST(req: NextRequest) {
 
 export async function DELETE(req: NextRequest) {
   try {
+    const sub = getUserIdFromRequest(req);
+    if (!sub) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Authentication required to revoke developer API keys.",
+          code: "UNAUTHORIZED",
+        },
+        { status: 401, headers: { "Access-Control-Allow-Origin": "*" } }
+      );
+    }
+
     const { searchParams } = new URL(req.url);
     const id = searchParams.get("id");
     if (!id) {
@@ -106,7 +146,7 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    const revoked = revokeApiKey(id);
+    const revoked = revokeApiKey(id, sub);
     if (!revoked) {
       return NextResponse.json(
         { success: false, error: "API Key not found or already revoked" },

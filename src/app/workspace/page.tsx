@@ -36,6 +36,7 @@ import {
   Heart,
   Smile,
   Info,
+  Lock,
 } from "lucide-react";
 import { SPEECH_PRESETS, SpeechTherapyPreset, PhonemeFinding } from "@/lib/presets";
 import { APP_METADATA } from "@/lib/sensifai/app-metadata";
@@ -114,30 +115,41 @@ export default function WorkspacePage() {
       .then((data) => {
         if (data && data.authenticated) {
           setSession(data);
+          loadApiKeys();
         } else {
           setSession({ authenticated: false, user: null, wallet: null });
+          setApiKeys([]);
         }
       })
       .catch(() => {
         setSession({ authenticated: false, user: null, wallet: null });
+        setApiKeys([]);
       });
-
-    loadApiKeys();
   }, []);
 
   const loadApiKeys = async () => {
     try {
       const res = await fetch("/api/v1/keys");
-      const data = await res.json();
-      if (data && data.keys) {
-        setApiKeys(data.keys);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.keys) {
+          setApiKeys(data.keys);
+        }
+      } else {
+        setApiKeys([]);
       }
     } catch (e) {
       console.error("Error loading API keys:", e);
+      setApiKeys([]);
     }
   };
 
   const handleGenerateKey = async () => {
+    if (!session?.authenticated) {
+      setKeyNoticeMsg("Authentication required: Please sign in with your Sensifai account to generate developer API keys.");
+      window.location.href = "/api/auth/login";
+      return;
+    }
     setGeneratingKey(true);
     setKeyNoticeMsg(null);
     try {
@@ -147,12 +159,12 @@ export default function WorkspacePage() {
         body: JSON.stringify({ name: newKeyName, prefix: "stp" }),
       });
       const data = await res.json();
-      if (data.success && data.apiKey) {
+      if (res.ok && data.success && data.apiKey) {
         setGeneratedKey(data.apiKey);
         setKeyNoticeMsg("Dedicated API Key created successfully. Store it safely now.");
         loadApiKeys();
       } else {
-        setKeyNoticeMsg(data.error || "Failed to generate key.");
+        setKeyNoticeMsg(data.error || "Failed to generate key. Please sign in.");
       }
     } catch (err: any) {
       setKeyNoticeMsg(err.message || "Network error generating key.");
@@ -162,6 +174,7 @@ export default function WorkspacePage() {
   };
 
   const handleRevokeKey = async (id: string) => {
+    if (!session?.authenticated) return;
     try {
       const res = await fetch(`/api/v1/keys?id=${id}`, { method: "DELETE" });
       const data = await res.json();
@@ -174,12 +187,28 @@ export default function WorkspacePage() {
   };
 
   const handleRunSandbox = async () => {
+    if (!session?.authenticated) {
+      setSandboxResult({
+        success: false,
+        error: "Authentication required: Please sign in with your Sensifai account to run sandbox evaluations.",
+      });
+      return;
+    }
     setSandboxLoading(true);
     setSandboxResult(null);
     try {
       const keyToUse =
         sandboxKeyInput.trim() ||
-        (apiKeys.length > 0 ? apiKeys[0].maskedKey : "stp_live_test_key");
+        generatedKey ||
+        (apiKeys.length > 0 ? apiKeys[0].maskedKey : "");
+      if (!keyToUse) {
+        setSandboxResult({
+          success: false,
+          error: "No active API key found. Please mint an application key first.",
+        });
+        setSandboxLoading(false);
+        return;
+      }
       const res = await fetch("/api/v1/process", {
         method: "POST",
         headers: {
@@ -769,6 +798,14 @@ export default function WorkspacePage() {
               </p>
             </div>
 
+            {/* Auth Gate for Unauthenticated Guest Visitors */}
+            <AuthGateCard
+              authenticated={Boolean(session?.authenticated)}
+              primaryColor={APP_METADATA.primaryColor}
+              priceEur={0.05}
+              featureTitle="B2B Developer API Key Generation & Headless Access"
+            />
+
             {/* Zero Logto ID Leakage Security Banner */}
             <div className="rounded-xl border border-emerald-200 bg-emerald-50/70 p-4 flex items-start gap-3">
               <ShieldCheck className="h-5 w-5 text-emerald-600 flex-shrink-0 mt-0.5" />
@@ -787,83 +824,108 @@ export default function WorkspacePage() {
               <h3 className="font-bold text-slate-900 text-sm">
                 Generate Dedicated Application Token
               </h3>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <input
-                  type="text"
-                  value={newKeyName}
-                  onChange={(e) => setNewKeyName(e.target.value)}
-                  placeholder="Key Identifier (e.g. Clinic Portal Key)"
-                  className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
-                />
-                <button
-                  onClick={handleGenerateKey}
-                  disabled={generatingKey}
-                  className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold text-xs transition-colors shadow-2xs"
-                >
-                  {generatingKey ? "Generating..." : "Mint Dedicated Key"}
-                </button>
-              </div>
 
-              {generatedKey && (
-                <div className="p-4 rounded-xl border border-emerald-300 bg-emerald-50 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
-                    <span>New Secret API Key Generated:</span>
+              {!session?.authenticated ? (
+                <div className="p-4 rounded-xl border border-rose-200 bg-rose-50/70 text-rose-950 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    <Lock className="h-4 w-4 text-rose-600 flex-shrink-0" />
+                    <span>Authentication Required: Please sign in with your Sensifai account to generate and manage developer API keys.</span>
+                  </div>
+                  <a
+                    href="/api/auth/login"
+                    className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-semibold whitespace-nowrap transition-colors shadow-2xs"
+                  >
+                    Sign In
+                  </a>
+                </div>
+              ) : (
+                <>
+                  <div className="flex flex-col sm:flex-row gap-3">
+                    <input
+                      type="text"
+                      value={newKeyName}
+                      onChange={(e) => setNewKeyName(e.target.value)}
+                      placeholder="Key Identifier (e.g. Clinic Portal Key)"
+                      className="flex-1 px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-rose-500"
+                    />
                     <button
-                      onClick={() => {
-                        navigator.clipboard.writeText(generatedKey);
-                        setCopiedKey(true);
-                        setTimeout(() => setCopiedKey(false), 2000);
-                      }}
-                      className="inline-flex items-center gap-1 text-[11px] text-emerald-700 hover:underline"
+                      onClick={handleGenerateKey}
+                      disabled={generatingKey}
+                      className="px-5 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold text-xs transition-colors shadow-2xs"
                     >
-                      {copiedKey ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
-                      <span>{copiedKey ? "Copied" : "Copy Secret"}</span>
+                      {generatingKey ? "Generating..." : "Mint Dedicated Key"}
                     </button>
                   </div>
-                  <div className="font-mono text-xs text-emerald-950 bg-white p-2.5 rounded-lg border border-emerald-200 select-all break-all">
-                    {generatedKey}
-                  </div>
-                  <p className="text-[11px] text-emerald-700">
-                    ⚠️ Store this key safely. For security, the full secret will not be displayed again.
-                  </p>
-                </div>
-              )}
 
-              {/* Active Keys Table */}
-              <div className="pt-2">
-                <h4 className="text-xs font-bold text-slate-700 mb-2">Active Keys</h4>
-                {apiKeys.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic">No keys generated yet.</p>
-                ) : (
-                  <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden text-xs">
-                    {apiKeys.map((k) => (
-                      <div key={k.id} className="p-3 flex items-center justify-between bg-slate-50/50">
-                        <div>
-                          <div className="font-semibold text-slate-800">{k.name}</div>
-                          <div className="font-mono text-[11px] text-slate-400">{k.maskedKey}</div>
-                        </div>
-                        <div className="flex items-center gap-3">
-                          <span
-                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                              k.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
-                            }`}
-                          >
-                            {k.status}
-                          </span>
-                          {k.status === "active" && (
-                            <button
-                              onClick={() => handleRevokeKey(k.id)}
-                              className="text-red-500 hover:text-red-700 text-xs"
-                            >
-                              Revoke
-                            </button>
-                          )}
-                        </div>
+                  {keyNoticeMsg && (
+                    <div className="p-3 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-700 flex items-center justify-between">
+                      <span>{keyNoticeMsg}</span>
+                      <button onClick={() => setKeyNoticeMsg(null)} className="font-bold ml-2">×</button>
+                    </div>
+                  )}
+
+                  {generatedKey && (
+                    <div className="p-4 rounded-xl border border-emerald-300 bg-emerald-50 space-y-2">
+                      <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
+                        <span>New Secret API Key Generated:</span>
+                        <button
+                          onClick={() => {
+                            navigator.clipboard.writeText(generatedKey);
+                            setCopiedKey(true);
+                            setTimeout(() => setCopiedKey(false), 2000);
+                          }}
+                          className="inline-flex items-center gap-1 text-[11px] text-emerald-700 hover:underline"
+                        >
+                          {copiedKey ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+                          <span>{copiedKey ? "Copied" : "Copy Secret"}</span>
+                        </button>
                       </div>
-                    ))}
+                      <div className="font-mono text-xs text-emerald-950 bg-white p-2.5 rounded-lg border border-emerald-200 select-all break-all">
+                        {generatedKey}
+                      </div>
+                      <p className="text-[11px] text-emerald-700">
+                        ⚠️ Store this key safely. For security, the full secret will not be displayed again.
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Active Keys Table */}
+                  <div className="pt-2">
+                    <h4 className="text-xs font-bold text-slate-700 mb-2">Active Keys</h4>
+                    {apiKeys.length === 0 ? (
+                      <p className="text-xs text-slate-400 italic">No keys generated yet.</p>
+                    ) : (
+                      <div className="divide-y divide-slate-100 border border-slate-100 rounded-xl overflow-hidden text-xs">
+                        {apiKeys.map((k) => (
+                          <div key={k.id} className="p-3 flex items-center justify-between bg-slate-50/50">
+                            <div>
+                              <div className="font-semibold text-slate-800">{k.name}</div>
+                              <div className="font-mono text-[11px] text-slate-400">{k.maskedKey}</div>
+                            </div>
+                            <div className="flex items-center gap-3">
+                              <span
+                                className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                  k.status === "active" ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"
+                                }`}
+                              >
+                                {k.status}
+                              </span>
+                              {k.status === "active" && (
+                                <button
+                                  onClick={() => handleRevokeKey(k.id)}
+                                  className="text-red-500 hover:text-red-700 text-xs"
+                                >
+                                  Revoke
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                </>
+              )}
             </div>
 
             {/* Interactive API Sandbox */}
@@ -878,39 +940,53 @@ export default function WorkspacePage() {
                 </span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Child Alias</label>
-                  <input
-                    type="text"
-                    value={sandboxChildAlias}
-                    onChange={(e) => setSandboxChildAlias(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs"
-                  />
+              {!session?.authenticated ? (
+                <div className="p-4 rounded-xl border border-slate-200 bg-slate-50 text-xs text-slate-600 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+                  <span>Sign in with your Sensifai account to test headless speech evaluations in the sandbox.</span>
+                  <a
+                    href="/api/auth/login"
+                    className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs transition-colors shadow-2xs"
+                  >
+                    Sign In
+                  </a>
                 </div>
-                <div>
-                  <label className="font-bold text-slate-700 block mb-1">Target Sound</label>
-                  <input
-                    type="text"
-                    value={sandboxTargetSound}
-                    onChange={(e) => setSandboxTargetSound(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs"
-                  />
-                </div>
-              </div>
+              ) : (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">Child Alias</label>
+                      <input
+                        type="text"
+                        value={sandboxChildAlias}
+                        onChange={(e) => setSandboxChildAlias(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="font-bold text-slate-700 block mb-1">Target Sound</label>
+                      <input
+                        type="text"
+                        value={sandboxTargetSound}
+                        onChange={(e) => setSandboxTargetSound(e.target.value)}
+                        className="w-full px-3 py-2 rounded-lg border border-slate-200 text-xs"
+                      />
+                    </div>
+                  </div>
 
-              <button
-                onClick={handleRunSandbox}
-                disabled={sandboxLoading}
-                className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-semibold text-xs transition-colors"
-              >
-                {sandboxLoading ? "Processing..." : "Send Request to API"}
-              </button>
+                  <button
+                    onClick={handleRunSandbox}
+                    disabled={sandboxLoading}
+                    className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white font-semibold text-xs transition-colors"
+                  >
+                    {sandboxLoading ? "Processing..." : "Send Request to API"}
+                  </button>
 
-              {sandboxResult && (
-                <div className="mt-3 p-4 rounded-xl border border-slate-800 bg-slate-950 font-mono text-xs overflow-x-auto text-emerald-400">
-                  <pre>{JSON.stringify(sandboxResult, null, 2)}</pre>
-                </div>
+                  {sandboxResult && (
+                    <div className="mt-3 p-4 rounded-xl border border-slate-800 bg-slate-950 font-mono text-xs overflow-x-auto text-emerald-400">
+                      <pre>{JSON.stringify(sandboxResult, null, 2)}</pre>
+                    </div>
+                  )}
+                </>
               )}
             </div>
 

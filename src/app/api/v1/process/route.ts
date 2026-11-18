@@ -3,6 +3,7 @@ export const revalidate = 0;
 
 import { NextRequest, NextResponse } from "next/server";
 import { validateApiKey } from "@/lib/sensifai/api-keys";
+import { usageService } from "@/lib/sensifai/usage";
 import { callSensifaiAIJson } from "@/lib/sensifai/ai";
 
 export async function OPTIONS() {
@@ -49,6 +50,53 @@ export async function POST(req: NextRequest) {
         }
       );
     }
+
+    // Strict Authentication & Customer Association Check
+    const userId = keyRecord.userId;
+    if (!userId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Unauthorized: API key is not linked to an active Sensifai customer account.",
+          code: "UNAUTHORIZED_KEY",
+        },
+        {
+          status: 401,
+          headers: {
+            "Access-Control-Allow-Origin": "*",
+          },
+        }
+      );
+    }
+
+    // Atomic Wallet Check & Metering:
+    // Enforce prepaid wallet balance check and record billable usage in Gatekeeper
+    const wallet = await usageService.checkWalletBalance(userId);
+    if (!wallet.hasFunds || wallet.balance <= 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Customer prepaid wallet balance is depleted. Please top up your Sensifai wallet.",
+          code: "PAYMENT_REQUIRED",
+          top_up_url: "https://sensifai.com/marketplace",
+        },
+        {
+          status: 402,
+          headers: { "Access-Control-Allow-Origin": "*" },
+        }
+      );
+    }
+
+    // Record billable usage event in Gatekeeper
+    usageService
+      .recordUsageImmediate({
+        identifier: usageService.generateIdentifier(userId, "b2b_process"),
+        price_id: process.env.SENSIFAI_PRICE_ID || "",
+        logto_user_id: userId,
+        usage: 1,
+        timestamp: Math.floor(Date.now() / 1000),
+      })
+      .catch((err) => console.warn("[B2B_PROCESS] Usage recording error:", err));
 
     const body = await req.json().catch(() => ({}));
 
@@ -97,13 +145,18 @@ Context Notes: ${notes}`;
 
     let processResult: any = null;
     try {
-      const { data } = await callSensifaiAIJson<any>({
-        mode: "fast",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-      });
+      const { data } = await Promise.race([
+        callSensifaiAIJson<any>({
+          mode: "fast",
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("AI Gateway timeout")), 12000)
+        ),
+      ]);
       processResult = data;
     } catch {
       // Deterministic Clinical Fallback
